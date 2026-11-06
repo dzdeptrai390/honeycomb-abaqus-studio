@@ -10,7 +10,7 @@ from pathlib import Path
 from native_cloud_worker import native_runtime
 
 from honeycomb_studio import solver
-from honeycomb_studio.cloud_continuation import checkpoint_inventory, verify_checkpoint
+from honeycomb_studio.cloud_continuation import checkpoint_inventory, verify_checkpoint, verify_solver_cleanup
 from honeycomb_studio.data import history_continuity
 from honeycomb_studio.store import write_json
 
@@ -47,10 +47,13 @@ j.writeInput(consistencyChecking=ON)
 
 
 def main():
+    global ROOT
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--stage', choices=('all', 'create', 'restore'), default='all')
     parser.add_argument('--damage', action='store_true', help='Verify JC damage/thermal/moving shell state')
+    parser.add_argument('--root', type=Path, default=ROOT, help='Separate probe directory for independent specimens')
     args = parser.parse_args()
+    ROOT = args.root.resolve()
     if args.stage != 'restore':
         ROOT.mkdir()
         (ROOT / 'abaqus_v6.env').write_text('verbose=ON\n')
@@ -113,10 +116,7 @@ def create_checkpoint(executable, control, reader, *, damage=False):
             raise RuntimeError('Probe never reached a checkpoint')
         (ROOT / 'continuation.stop').touch()
         process.wait(timeout=90)
-        stop_log = (ROOT / 'first.log').read_text(errors='replace').lower()
-        if any(marker in stop_log for marker in ('segmentation fault', 'double free', 'corrupted unsorted',
-                                                  'corruption (')):
-            raise RuntimeError('Checkpoint stop crashed during solver cleanup; inspect first.log')
+        verify_solver_cleanup(ROOT / 'first.log')
         if not (ROOT / 'continuation-stop-ack.json').exists():
             raise RuntimeError('Solver did not acknowledge orderly stop')
         (ROOT / 'continuation.stop').unlink()

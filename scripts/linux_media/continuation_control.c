@@ -7,6 +7,15 @@
 #include <limits.h>
 #include <unistd.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+int get_thread_id_(void);
+void xplb_exit_(void);
+#ifdef __cplusplus
+}
+#endif
+
 static int control_path(char *path, size_t length, const char *name)
 {
     const char *directory = getenv("HONEYCOMB_CONTINUATION_DIRECTORY");
@@ -23,7 +32,12 @@ void vexternaldb_(const int *operation, int *integers, const int *integer_count,
     static int pending = 0;
     static int initialized = 0;
     static unsigned int polls = 0;
+    static double checkpoint_time = 0.;
+    static int checkpoint_increment = 0;
     char stop_path[PATH_MAX], ack_path[PATH_MAX];
+    /* Abaqus 2020's threaded fatal-exit cleanup corrupts shared memory if
+     * several threads enter it. Only the main thread owns control and I/O. */
+    if (get_thread_id_() != 0) return;
     if (!initialized) {
         char metadata[PATH_MAX];
         if (control_path(metadata, sizeof(metadata), "continuation-control.json")) {
@@ -42,20 +56,27 @@ void vexternaldb_(const int *operation, int *integers, const int *integer_count,
     if (*operation == 0) { pending = 0; polls = 0; }
     if (*operation == 2 && pending == 2)
         integers[5] = 0; /* checkpoint is already written; no restart from the shutdown increment */
-    if (*operation == 2 && pending == 0 && (++polls % 256 == 0) &&
-        access(stop_path, F_OK) == 0) {
-        pending = 1;
-        integers[5] = 1; /* write restart at the end of this increment */
-    }
-    if (*operation == 4 && pending == 1) {
-        /* Termination adds one zero-time increment. Do not request it again
-         * from that increment, or overwrite the acknowledged checkpoint. */
+    if (*operation == 2 && pending == 1 && integers[3] != checkpoint_increment &&
+        reals[1] > checkpoint_time) {
+        /* The previous increment already wrote the restart. XPLB_EXIT closes
+         * solver files without the threaded iStatus fatal-error path. */
+        integers[5] = 0;
         pending = 2;
-        integers[4] = 2; /* terminate analysis through the supported solver API */
         FILE *ack = fopen(ack_path, "w");
         if (ack) {
-            fprintf(ack, "{\"simulation_time_s\":%.17g,\"increment\":%d}\n", reals[1], integers[3]);
+            fprintf(ack, "{\"simulation_time_s\":%.17g,\"increment\":%d}\n",
+                    checkpoint_time, checkpoint_increment);
             fclose(ack);
         }
+        xplb_exit_();
+    }
+    if (*operation == 2 && pending == 0 && (++polls % 256 == 0) &&
+        access(stop_path, F_OK) == 0) {
+        /* Schedule the restart one increment before termination. Abaqus then
+         * sees no restart request on the final zero-time increment. */
+        pending = 1;
+        integers[5] = 1; /* write restart at the end of this increment */
+        checkpoint_time = reals[1];
+        checkpoint_increment = integers[3];
     }
 }
