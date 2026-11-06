@@ -1,3 +1,4 @@
+# Refresh Actions discovery after repository provisioning.
 name: Core damage · surrogates and Pareto
 run-name: core-damage-analysis · ${{ inputs.ticket }}
 on:

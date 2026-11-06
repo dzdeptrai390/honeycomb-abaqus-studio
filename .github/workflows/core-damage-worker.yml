@@ -1,3 +1,4 @@
+# Refresh Actions discovery after repository provisioning.
 name: Core damage · one design per job
 run-name: core-damage · ${{ inputs.ticket }}
 on:
